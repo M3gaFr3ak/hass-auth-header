@@ -55,9 +55,7 @@ class HeaderAuthProvider(AuthProvider):
         remote_user = request.headers[header_name].casefold()
         # Translate username to id
         users = await self.store.async_get_users()
-        available_users = [
-            user for user in users if not user.system_generated and user.is_active
-        ]
+        available_users = [user for user in users if not user.system_generated and user.is_active]
         return HeaderLoginFlow(
             self,
             remote_user,
@@ -66,18 +64,14 @@ class HeaderAuthProvider(AuthProvider):
             self.config[CONF_ALLOW_BYPASS_LOGIN],
         )
 
-    async def async_user_meta_for_credentials(
-        self, credentials: Credentials
-    ) -> UserMeta:
+    async def async_user_meta_for_credentials(self, credentials: Credentials) -> UserMeta:
         """Return extra user metadata for credentials.
 
         Trusted network auth provider should never create new user.
         """
         raise NotImplementedError
 
-    async def async_get_or_create_credentials(
-        self, flow_result: Dict[str, str]
-    ) -> Credentials:
+    async def async_get_or_create_credentials(self, flow_result: Dict[str, str]) -> Credentials:
         """Get credentials based on the flow result."""
         user_id = flow_result["user"]
 
@@ -106,8 +100,7 @@ class HeaderAuthProvider(AuthProvider):
             raise InvalidAuthError("trusted_proxies is not configured")
 
         if not any(
-            ip_addr in trusted_network
-            for trusted_network in self.hass.http.trusted_proxies
+            ip_addr in trusted_network for trusted_network in self.hass.http.trusted_proxies
         ):
             _LOGGER.warning("Remote IP not in trusted proxies: %s", ip_addr)
             raise InvalidAuthError("Not in trusted_proxies")
@@ -143,7 +136,7 @@ class HeaderLoginFlow(LoginFlow):
             except InvalidAuthError as exc:
                 _LOGGER.debug("Invalid auth: %s", exc)
                 return self.async_abort(reason="not_allowed")
-            
+
             for user in self._available_users:
                 _LOGGER.debug("Checking user: %s", user.name)
                 for cred in user.credentials:
@@ -158,7 +151,7 @@ class HeaderLoginFlow(LoginFlow):
 
             _LOGGER.debug("No matching user found")
             return self.async_abort(reason="not_allowed")
-        
+
         _LOGGER.debug("Showing login form with remote_user: %s", self._remote_user)
         return self.async_show_form(
             step_id="init",
