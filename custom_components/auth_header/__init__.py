@@ -30,9 +30,26 @@ CONFIG_SCHEMA = vol.Schema(
         DOMAIN: vol.Schema(
             {
                 vol.Optional(
-                    "username_header", default="X-Forwarded-Preferred-Username"
+                    headers.CONF_USERNAME_HEADER, default="X-Forwarded-Preferred-Username"
                 ): cv.string,
-                vol.Optional("allow_bypass_login", default=True): cv.boolean,
+                vol.Optional(headers.CONF_DISPLAYNAME_HEADER, default=""): cv.string,
+                vol.Optional(headers.CONF_USERNAME_PREFIX, default=""): cv.string,
+                vol.Optional(headers.CONF_ALLOW_BYPASS_LOGIN, default=True): cv.boolean,
+                vol.Optional(headers.CONF_CREATE_NONEXISTENT, default=False): cv.boolean,
+                vol.Optional(headers.CONF_USERGROUP_HEADER, default=""): cv.string,
+                vol.Optional(headers.CONF_GROUPMAPPING, default={}): vol.Schema(
+                    {
+                        vol.Optional(
+                            headers.CONF_GROUPMAPPING_SYSTEM_USERS, default=["system-users"]
+                        ): vol.All(cv.ensure_list, [cv.string]),
+                        vol.Optional(
+                            headers.CONF_GROUPMAPPING_SYSTEM_ADMIN, default=["system-admin"]
+                        ): vol.All(cv.ensure_list, [cv.string]),
+                        vol.Optional(headers.CONF_GROUPMAPPING_LOCAL_ONLY, default=[]): vol.All(
+                            cv.ensure_list, [cv.string]
+                        ),
+                    }
+                ),
                 vol.Optional("debug", default=False): cv.boolean,
             }
         )
@@ -142,8 +159,10 @@ class RequestLoginFlowIndexView(LoginFlowIndexView):
                 handler,  # type: ignore[arg-type]
                 context={
                     "request": request,
-                    "ip_address": ip_address(request.remote),  # type: ignore[arg-type]
-                    "conn_ip_address": ip_address(actual_ip),  # type: ignore[arg-type]
+                    # type: ignore[arg-type]
+                    "ip_address": ip_address(request.remote),
+                    # type: ignore[arg-type]
+                    "conn_ip_address": ip_address(actual_ip),
                     "credential_only": data.get("type") == "link_user",
                     "redirect_uri": redirect_uri,
                 },
