@@ -14,17 +14,18 @@ from homeassistant.auth.providers.trusted_networks import (
     IPAddress,
 )
 from homeassistant.core import callback
+from homeassistant.auth.const import GROUP_ID_USER, GROUP_ID_ADMIN
 
 CONF_USERNAME_PREFIX = "username_prefix"
 CONF_USERNAME_HEADER = "username_header"
 CONF_DISPLAYNAME_HEADER = "displayname_header"
 CONF_USERGROUP_HEADER = "usergroup_header"
 CONF_ALLOW_BYPASS_LOGIN = "allow_bypass_login"
-CONF_CREATE_NONEXISTENT = "create_nonexistent"
+CONF_CREATE_NONEXISTENT = "allow_create_nonexistent"
 CONF_GROUPMAPPING = "groupmapping"
 CONF_GROUPMAPPING_SYSTEM_USERS = "system_users"
 CONF_GROUPMAPPING_SYSTEM_ADMIN = "system_admin"
-CONF_GROUPMAPPING_LOCAL_ONLY = "system_users"
+CONF_GROUPMAPPING_LOCAL_ONLY = "local_only"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class HeaderAuthProvider(AuthProvider):
             [],
             cast(IPAddress, context.get("conn_ip_address")),
             self.config[CONF_ALLOW_BYPASS_LOGIN],
+            self.config[CONF_CREATE_NONEXISTENT],
         )
 
         if username_header_name not in request.headers:
@@ -87,27 +89,40 @@ class HeaderAuthProvider(AuthProvider):
         )
         remote_group = request.headers[usergroup_header_name].casefold()
 
-        self._user_meta["name"] = request.headers[displayname_header_name]
+        meta: dict[str, str] = {}
+
+        meta["name"] = request.headers[displayname_header_name]
 
         # Admin has precedence
         if (
-            remote_group in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_SYSTEM_ADMIN]
+            any(
+                group in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_SYSTEM_ADMIN]
+                for group in remote_group
+            )
             or "*" in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_SYSTEM_ADMIN]
         ):
-            self._user_meta["group"] = "system_admin"
+            meta["group"] = GROUP_ID_ADMIN
         elif (
-            remote_group in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_SYSTEM_USERS]
+            any(
+                group in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_SYSTEM_USERS]
+                for group in remote_group
+            )
             or "*" in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_SYSTEM_USERS]
         ):
-            self._user_meta["group"] = "system_users"
+            meta["group"] = GROUP_ID_USER
         else:
             _LOGGER.info("No group header mapped to neither group, returning empty flow")
             return empty_header_flow
 
-        self._user_meta["local_only"] = (
-            remote_group in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_LOCAL_ONLY]
+        meta["local_only"] = (
+            any(
+                group in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_LOCAL_ONLY]
+                for group in remote_group
+            )
             or "*" in self.config[CONF_GROUPMAPPING][CONF_GROUPMAPPING_LOCAL_ONLY]
         )
+
+        self._user_meta[remote_user] = meta
 
         # Translate username to id
         users = await self.store.async_get_users()
@@ -118,31 +133,54 @@ class HeaderAuthProvider(AuthProvider):
             available_users,
             cast(IPAddress, context.get("conn_ip_address")),
             self.config[CONF_ALLOW_BYPASS_LOGIN],
+            self.config[CONF_CREATE_NONEXISTENT],
         )
 
     async def async_user_meta_for_credentials(self, credentials: Credentials) -> UserMeta:
         """Return extra user metadata for credentials.
 
-        Trusted network auth provider should never create new user.
+        Currently, supports name, group and local_only.
         """
-        raise NotImplementedError
+        meta = self._user_meta.get(credentials.data["username"], {})
+        return UserMeta(
+            name=meta.get("name"),
+            is_active=True,
+            group=meta.get("group"),
+            local_only=meta.get("local_only") == "true",
+        )
 
     async def async_get_or_create_credentials(self, flow_result: Dict[str, str]) -> Credentials:
         """Get credentials based on the flow result."""
-        user_id = flow_result["user"]
+        create = flow_result["create"]
+        username = flow_result["username"]
 
-        users = await self.store.async_get_users()
-        for user in users:
-            if not user.system_generated and user.is_active and user.id == user_id:
-                for credential in await self.async_credentials():
-                    if credential.data["user_id"] == user_id:
-                        return credential
-                cred = self.async_create_credentials({"user_id": user_id})
-                await self.store.async_link_user(user, cred)
-                return cred
+        _LOGGER.debug("async def async_get_or_create_credentials " + str(create))
 
-        # We only allow login as exist user
-        raise InvalidUserError
+        if not create:
+            user_id = flow_result["user"]
+
+            users = await self.store.async_get_users()
+            for user in users:
+                if not user.system_generated and user.is_active and user.id == user_id:
+                    for credential in await self.async_credentials():
+                        if (
+                            "username" in credential.data
+                            and credential.data["username"] == username
+                        ):
+                            return credential
+                        if "user_id" in credential.data and credential.data["user_id"] == user_id:
+                            return credential
+                    cred = self.async_create_credentials({"user_id": user_id, "username": username})
+                    await self.store.async_link_user(user, cred)
+                    return cred
+        else:
+            _LOGGER.debug("Creating credentials for " + username)
+            if self.config[CONF_CREATE_NONEXISTENT]:
+                return self.async_create_credentials({"username": username})
+            else:
+                raise InvalidUserError(
+                    "User doesn't exist and creation of nonexistent users is disabled"
+                )
 
     @callback
     def async_validate_access(self, ip_addr: IPAddress) -> None:
@@ -172,6 +210,7 @@ class HeaderLoginFlow(LoginFlow):
         available_users: List[User],
         ip_address: IPAddress,
         allow_bypass_login: bool,
+        allow_create_nonexistent: bool,
     ) -> None:
         """Initialize the login flow."""
         super().__init__(auth_provider)
@@ -179,6 +218,7 @@ class HeaderLoginFlow(LoginFlow):
         self._remote_user = remote_user
         self._ip_address = ip_address
         self._allow_bypass_login = allow_bypass_login
+        self._allow_create_nonexistent = allow_create_nonexistent
 
     async def async_step_init(self, user_input=None) -> Dict[str, Any]:
         """Handle the step of the form."""
@@ -200,13 +240,21 @@ class HeaderLoginFlow(LoginFlow):
                         _LOGGER.debug("Found username in credentials: %s", cred.data["username"])
                         if cred.data["username"] == self._remote_user:
                             _LOGGER.debug("Username match found, finishing login flow")
-                            return await self.async_finish({"user": user.id})
+                            return await self.async_finish(
+                                {"create": False, "user": user.id, "username": user.name}
+                            )
                 if user.name == self._remote_user:
                     _LOGGER.debug("User name match found, finishing login flow")
-                    return await self.async_finish({"user": user.id})
+                    return await self.async_finish(
+                        {"create": False, "user": user.id, "username": user.name}
+                    )
 
-            _LOGGER.debug("No matching user found")
-            return self.async_abort(reason="not_allowed")
+            if self._allow_create_nonexistent:
+                _LOGGER.debug("No matching user found, creating user and finishing login flow")
+                return await self.async_finish({"create": True, "username": self._remote_user})
+            else:
+                _LOGGER.debug("No matching user found, user creation not enabled")
+                return self.async_abort(reason="not_allowed")
 
         _LOGGER.debug("Showing login form with remote_user: %s", self._remote_user)
         return self.async_show_form(

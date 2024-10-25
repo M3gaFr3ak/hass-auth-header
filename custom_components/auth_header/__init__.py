@@ -40,11 +40,11 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional(headers.CONF_GROUPMAPPING, default={}): vol.Schema(
                     {
                         vol.Optional(
-                            headers.CONF_GROUPMAPPING_SYSTEM_USERS, default=["system-users"]
+                            headers.CONF_GROUPMAPPING_SYSTEM_USERS, default=["*"]
                         ): vol.All(cv.ensure_list, [cv.string]),
-                        vol.Optional(
-                            headers.CONF_GROUPMAPPING_SYSTEM_ADMIN, default=["system-admin"]
-                        ): vol.All(cv.ensure_list, [cv.string]),
+                        vol.Optional(headers.CONF_GROUPMAPPING_SYSTEM_ADMIN, default=[]): vol.All(
+                            cv.ensure_list, [cv.string]
+                        ),
                         vol.Optional(headers.CONF_GROUPMAPPING_LOCAL_ONLY, default=[]): vol.All(
                             cv.ensure_list, [cv.string]
                         ),
